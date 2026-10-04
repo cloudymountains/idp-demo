@@ -1,0 +1,22 @@
+# ATTACK 4: "give the service admin permissions, I will narrow them later"
+# Expected: DENIED. The denial message cites the nine-second incident from Act 0,
+# which closes the loop between the cold open and the demo climax.
+apiVersion: platform.cloudymountains.io/v1
+kind: Service
+metadata:
+  name: checkout
+  owner: payments-team
+  costCentre: CC-4471
+  environment: dev
+spec:
+  runtime:
+    type: container
+    cpu: 512
+    memory: 1024
+  database:
+    engine: postgres
+    size: small
+    retention: 7d
+  permissions:
+    capabilities:
+      - admin

@@ -1,0 +1,178 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://platform.cloudymountains.io/schemas/service.v1.json",
+  "title": "Service",
+  "description": "The platform contract. An agent writes this file. It never writes Terraform. Every field here is deliberately enumerated: the point is to make the output space small enough that a non-deterministic author is safe.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {
+      "const": "platform.cloudymountains.io/v1"
+    },
+    "kind": {
+      "const": "Service"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name", "owner", "costCentre", "environment"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,28}[a-z0-9]$",
+          "description": "Lowercase DNS-safe name. Becomes the ECS service name, the ALB target group name and the tag prefix."
+        },
+        "owner": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]+$",
+          "description": "Owning team. Must match a team in steering/naming.md. Paged when the SLO burns."
+        },
+        "costCentre": {
+          "type": "string",
+          "pattern": "^CC-[0-9]{4}$",
+          "description": "Finance cost centre. Every resource is tagged with this. Untagged spend is unattributable, so this is required, not optional."
+        },
+        "environment": {
+          "enum": ["dev", "staging", "prod"],
+          "description": "Drives nearly every policy decision. Most rules in platform/policies are conditional on this field."
+        }
+      }
+    },
+    "spec": {
+      "type": "object",
+      "required": ["runtime"],
+      "additionalProperties": false,
+      "properties": {
+        "runtime": {
+          "type": "object",
+          "required": ["type"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "enum": ["container"],
+              "description": "Only Fargate containers today. This enum is where a second golden path would be added."
+            },
+            "cpu": {
+              "enum": [256, 512, 1024, 2048, 4096],
+              "default": 512,
+              "description": "Fargate CPU units. Enumerated, not free integers, so the agent cannot invent an invalid task size."
+            },
+            "memory": {
+              "enum": [512, 1024, 2048, 4096, 8192, 16384],
+              "default": 1024,
+              "description": "Fargate memory in MiB. Valid CPU/memory pairings are enforced in policy, not here, because the constraint is relational."
+            },
+            "image": {
+              "type": "string",
+              "description": "Container image. Registry allow-list is enforced in policy.",
+              "default": "public.ecr.aws/nginx/nginx:stable"
+            },
+            "replicas": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10,
+              "default": 2
+            }
+          }
+        },
+        "ingress": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "public": {
+              "type": "boolean",
+              "default": false,
+              "description": "Attaches an internet-facing ALB. False means internal only."
+            },
+            "path": {
+              "type": "string",
+              "pattern": "^/[a-z0-9/_-]*$",
+              "default": "/"
+            },
+            "healthCheckPath": {
+              "type": "string",
+              "pattern": "^/[a-z0-9/_-]*$",
+              "default": "/"
+            }
+          }
+        },
+        "database": {
+          "type": "object",
+          "required": ["engine", "size"],
+          "additionalProperties": false,
+          "properties": {
+            "engine": {
+              "enum": ["postgres", "mysql"],
+              "description": "Engine family. The module pins the minor version so the agent cannot choose one."
+            },
+            "size": {
+              "enum": ["small", "medium", "large", "xlarge"],
+              "description": "Deliberately a t-shirt size, not an instance class. Developers think in size and purpose. The mapping to db.t4g.micro and friends lives in the module, where the platform team owns it. Which sizes are permitted in which environment is a policy decision, not a schema one."
+            },
+            "retention": {
+              "enum": ["0d", "1d", "7d", "14d", "30d", "35d"],
+              "default": "7d",
+              "description": "Backup retention. 0d is expressible so that policy can deny it with a readable reason, which teaches the agent more than a schema rejection does."
+            },
+            "public": {
+              "type": "boolean",
+              "default": false,
+              "description": "Expressible, and always denied by policy. The denial message is the teaching mechanism."
+            },
+            "multiAz": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        },
+        "permissions": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Task role permissions. Coarse capability names, never raw IAM. The module renders least-privilege policy documents from these.",
+          "properties": {
+            "capabilities": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "enum": [
+                  "s3:read-own-bucket",
+                  "s3:write-own-bucket",
+                  "sqs:consume-own-queue",
+                  "sqs:publish-own-queue",
+                  "secrets:read-own",
+                  "admin"
+                ]
+              },
+              "default": [],
+              "description": "'admin' is expressible on purpose so that policy can deny it with an explanation. See the note on database.public."
+            }
+          }
+        },
+        "observability": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Optional overrides only. The module ships a dashboard, alarms, an SLO, log retention and tracing whether or not this block is present. Observability is a property of having used the platform, not something a developer has to request.",
+          "properties": {
+            "sloTargetPercent": {
+              "type": "number",
+              "minimum": 90,
+              "maximum": 99.99,
+              "default": 99.0
+            },
+            "logRetentionDays": {
+              "enum": [1, 3, 7, 14, 30, 90, 365],
+              "default": 30
+            }
+          }
+        },
+        "overrides": {
+          "type": "object",
+          "description": "The typed escape hatch. Raw module arguments for the last one percent of cases. Schema-validated, and any PR touching this block requires a platform-team reviewer. Flexibility stays reachable without leaking into the common path.",
+          "additionalProperties": true,
+          "default": {}
+        }
+      }
+    }
+  }
+}

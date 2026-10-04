@@ -1,0 +1,53 @@
+__pycache__/
+*.pyc
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+*.tfplan.json
+.env
+.venv/
+deploy/*.tfvars.json
+bootstrap/.terraform/
+bootstrap/terraform.tfstate*
+qa/
+
+# ---------------------------------------------------------------------------
+# Talk material, deliberately not committed.
+#
+# This repository is the platform: the contract, the rings, the module, the
+# pipeline, plus the deck as it was presented. The deck sources, the speaker's
+# photo and the conference template are personal and event-specific, and the
+# AWS Community Day template is not mine to redistribute.
+#
+# Every one of these files still exists on disk. They are untracked, not gone.
+# ---------------------------------------------------------------------------
+
+# Decks. The delivered deck is committed; drafts and lock files are not.
+*.pptx
+!AI-Native-IDP-on-AWS.pptx
+~$*.pptx
+slides/
+docs/deck.pdf
+docs/deck/
+
+# The talk plan: it carries pitch framing and speaker notes, not documentation
+docs/talk-plan.md
+
+# The pptx generator, which is only useful alongside the deck itself
+build/
+
+# Speaker photo
+54817455014_*.jpg
+
+# macOS
+.DS_Store
+
+# Recording output: fallback video material for the talk, not platform code.
+# The scripts that produce it are committed; the captures are not.
+recording/*.cast
+recording/*.gif
+recording/antidemo/
+
+# The platform agent: its local decision log
+agent/.decisions.jsonl

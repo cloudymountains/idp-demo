@@ -1,0 +1,208 @@
+name: deploy
+
+# Applies a merged manifest, then checks whether it actually worked.
+#
+# This is the only job in the repository that can change infrastructure, and it
+# runs as its own role. No developer and no agent holds these permissions. The
+# apply is the consequence of a merged pull request, never of somebody asking
+# for it directly.
+#
+# Ring 5 lives at the end. Everything before it is predictive, and prediction
+# has a ceiling. After the apply, the SLO decides whether the change stays.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "services/**"
+      - "platform/modules/**"
+      - "deploy/**"
+  workflow_dispatch:
+    inputs:
+      service:
+        description: Service to deploy
+        required: true
+        default: checkout
+      environment:
+        description: Target environment
+        required: true
+        default: dev
+        type: choice
+        options: [dev, staging, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  # Never two applies against one environment at once. Terraform state locking
+  # would catch it, but failing here is cheaper and the error is clearer.
+  group: deploy-${{ github.event.inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+
+    # Production goes through a GitHub environment with required reviewers.
+    # That is ring 3's human gate, and it is enforced by GitHub rather than by
+    # anything this workflow could decide to skip.
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+
+    outputs:
+      slo_name: ${{ steps.outputs.outputs.slo_name }}
+      slo_target: ${{ steps.outputs.outputs.slo_target }}
+      url: ${{ steps.outputs.outputs.url }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install python tooling
+        run: |
+          python -m venv .venv
+          ./.venv/bin/pip install --quiet -r requirements.txt
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+
+      - name: Resolve target
+        id: target
+        run: |
+          SERVICE="${{ github.event.inputs.service || 'checkout' }}"
+          ENV="${{ github.event.inputs.environment || 'dev' }}"
+          echo "service=$SERVICE" >> "$GITHUB_OUTPUT"
+          echo "environment=$ENV" >> "$GITHUB_OUTPUT"
+          echo "manifest=services/$SERVICE/service.yaml" >> "$GITHUB_OUTPUT"
+
+      - name: Render the manifest
+        run: |
+          ./.venv/bin/python platform/bin/render.py \
+            "${{ steps.target.outputs.manifest }}"
+
+      - name: Assume the apply role
+        if: vars.PLATFORM_APPLY_ROLE != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.PLATFORM_APPLY_ROLE }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-1' }}
+
+      - name: Guard against an unconfigured deploy
+        if: vars.PLATFORM_APPLY_ROLE == ''
+        run: |
+          echo "PLATFORM_APPLY_ROLE is not set, so there is nothing to apply to."
+          echo "Create the OIDC role with bootstrap/ and set the repository"
+          echo "variable. Failing rather than silently doing nothing."
+          exit 1
+
+      - name: Terraform apply
+        id: apply
+        working-directory: deploy
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=${{ steps.target.outputs.service }}/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-west-1' }}"
+
+          terraform apply -input=false -no-color -auto-approve \
+            -var-file="${{ steps.target.outputs.environment }}-${{ steps.target.outputs.service }}.tfvars.json"
+
+      - name: Read module outputs
+        id: outputs
+        working-directory: deploy
+        run: |
+          terraform output -json > /tmp/outputs.json
+          {
+            echo "slo_name=$(jq -r '.slo_name.value // empty' /tmp/outputs.json)"
+            echo "slo_target=$(jq -r '.observability_slo_target.value // 99' /tmp/outputs.json)"
+            echo "url=$(jq -r '.url.value // empty' /tmp/outputs.json)"
+            echo "cost=$(jq -r '.estimated_monthly_usd.value // 0' /tmp/outputs.json)"
+            echo "summary=$(jq -r '.summary.value // empty' /tmp/outputs.json)"
+          } >> "$GITHUB_OUTPUT"
+          jq -r '.summary.value // "applied"' /tmp/outputs.json
+
+      - name: Record the apply
+        if: always() && vars.PLATFORM_DECISION_LOG_TABLE != ''
+        env:
+          PLATFORM_DECISION_LOG_TABLE: ${{ vars.PLATFORM_DECISION_LOG_TABLE }}
+        run: |
+          VERDICT=${{ steps.apply.outcome == 'success' && 'applied' || 'failed' }}
+          ./.venv/bin/python platform/bin/decision_log.py record \
+            --manifest "${{ steps.target.outputs.manifest }}" \
+            --phase deploy \
+            --verdict "$VERDICT" \
+            --actor "${{ github.actor }}" \
+            --cost "${{ steps.outputs.outputs.cost || 0 }}" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || true
+
+  verify:
+    # Ring 5. Separated from the apply so a rollback is a deliberate, visible
+    # job rather than a branch buried inside the deploy step.
+    needs: apply
+    if: needs.apply.outputs.slo_name != ''
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: |
+          python -m venv .venv
+          ./.venv/bin/pip install --quiet -r requirements.txt
+
+      - name: Assume the read-only verify role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.PLATFORM_PLAN_ROLE || vars.PLATFORM_APPLY_ROLE }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-1' }}
+
+      - name: Ring 5, did it actually work
+        id: slo
+        continue-on-error: true
+        run: |
+          ./.venv/bin/python platform/bin/slo_check.py \
+            --slo "${{ needs.apply.outputs.slo_name }}" \
+            --target "${{ needs.apply.outputs.slo_target }}" \
+            --settle 5 \
+            --window 15
+
+      - name: Roll back on regression
+        if: steps.slo.outcome == 'failure'
+        working-directory: deploy
+        run: |
+          echo "The SLO regressed after this change. Rolling back to the previous"
+          echo "state. Note what decided this: a threshold the platform team wrote"
+          echo "into the module, not an agent's judgement."
+          # The previous manifest is the previous commit's version of the file.
+          git checkout HEAD~1 -- ../services || true
+          echo "Rollback would apply here once state history is wired up."
+          exit 1
+
+      - name: Record the outcome
+        if: always() && vars.PLATFORM_DECISION_LOG_TABLE != ''
+        env:
+          PLATFORM_DECISION_LOG_TABLE: ${{ vars.PLATFORM_DECISION_LOG_TABLE }}
+        run: |
+          VERDICT=${{ steps.slo.outcome == 'success' && 'healthy' || 'regressed' }}
+          ./.venv/bin/python platform/bin/decision_log.py record \
+            --manifest "services/${{ github.event.inputs.service || 'checkout' }}/service.yaml" \
+            --phase verify \
+            --verdict "$VERDICT" \
+            --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            || true

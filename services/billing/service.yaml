@@ -1,0 +1,16 @@
+apiVersion: platform.cloudymountains.io/v1
+kind: Service
+metadata:
+  name: billing
+  owner: payments-team
+  costCentre: CC-4471
+  environment: dev
+spec:
+  runtime:
+    type: container
+    cpu: 512
+    memory: 1024
+  database:
+    engine: postgres
+    size: small
+    retention: 7d

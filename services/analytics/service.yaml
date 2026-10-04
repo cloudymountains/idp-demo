@@ -1,0 +1,13 @@
+apiVersion: platform.cloudymountains.io/v1
+kind: Service
+metadata:
+  name: analytics
+  owner: data-team
+  costCentre: CC-2201
+  environment: dev
+spec:
+  runtime:
+    type: container
+  database:
+    engine: postgres
+    size: medium

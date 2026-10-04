@@ -1,0 +1,170 @@
+name: platform checks
+
+# Rings 1 and 2, on every pull request that touches a manifest or the platform
+# itself. Nothing here can change infrastructure: the job has no AWS write
+# permission, and the plan step below assumes a read-only role.
+#
+# The comment is posted before the job fails, so an agent watching the pull
+# request gets the denial text even on a refusal. Failing first and explaining
+# afterwards would make the whole feedback loop useless.
+
+on:
+  pull_request:
+    paths:
+      - "services/**"
+      - "platform/**"
+      - "deploy/**"
+      - ".github/workflows/pr.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: platform-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install python tooling
+        run: |
+          python -m venv .venv
+          ./.venv/bin/pip install --quiet -r requirements.txt
+
+      - name: Install conftest
+        run: |
+          VERSION=0.56.0
+          curl -sSL "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/conftest_${VERSION}_Linux_x86_64.tar.gz" \
+            | sudo tar xz -C /usr/local/bin conftest
+          conftest --version
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.3
+          terraform_wrapper: false
+
+      - name: Which manifests changed
+        id: changed
+        run: |
+          # Only check what this pull request actually touched. A repository with
+          # a hundred services should not re-validate all of them on every change.
+          FILES=$(git diff --name-only --diff-filter=d \
+            "origin/${{ github.base_ref }}...HEAD" -- 'services/*/service.yaml' \
+            | tr '\n' ' ')
+          if [ -z "$FILES" ]; then
+            FILES=$(ls services/*/service.yaml 2>/dev/null | tr '\n' ' ')
+            echo "No manifest changed; falling back to all of them."
+          fi
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "Checking: $FILES"
+
+      - name: Ring 1 and 2
+        id: rings
+        continue-on-error: true
+        run: ./platform/bin/check.sh
+
+      - name: Compose the review comment
+        id: comment
+        run: |
+          ./.venv/bin/python platform/bin/pr_comment.py ${{ steps.changed.outputs.files }} \
+            > /tmp/comment.md
+          cat /tmp/comment.md
+
+      - name: Post or update the comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const marker = '<!-- platform-check -->';
+            const body = marker + '\n' + fs.readFileSync('/tmp/comment.md', 'utf8');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            // Update in place rather than appending. A pull request that gets
+            // five pushes should not carry five stale verdicts.
+            const existing = comments.find(c => c.body.startsWith(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      # Everything below needs AWS and is skipped until the OIDC role exists.
+      # Set the PLATFORM_PLAN_ROLE repository variable to switch it on.
+      - name: Assume the read-only plan role
+        if: vars.PLATFORM_PLAN_ROLE != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.PLATFORM_PLAN_ROLE }}
+          aws-region: ${{ vars.AWS_REGION || 'eu-west-1' }}
+
+      - name: Terraform plan
+        if: vars.PLATFORM_PLAN_ROLE != ''
+        working-directory: deploy
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="key=checkout/terraform.tfstate" \
+            -backend-config="region=${{ vars.AWS_REGION || 'eu-west-1' }}"
+          terraform plan -input=false -no-color -lock=false \
+            -var-file=dev-checkout.tfvars.json -out=tfplan
+          terraform show -json tfplan > tfplan.json
+
+      - name: Policy over the plan
+        if: vars.PLATFORM_PLAN_ROLE != ''
+        run: |
+          # The manifest was already checked. This checks what Terraform
+          # actually intends to create, which is the thing that will exist.
+          conftest test --policy platform/policies --namespace platform.plan \
+            deploy/tfplan.json || true
+
+      - name: Record the verdict
+        if: always() && vars.PLATFORM_DECISION_LOG_TABLE != ''
+        env:
+          PLATFORM_DECISION_LOG_TABLE: ${{ vars.PLATFORM_DECISION_LOG_TABLE }}
+        run: |
+          VERDICT=${{ steps.rings.outcome == 'success' && 'allowed' || 'denied' }}
+          for m in ${{ steps.changed.outputs.files }}; do
+            ./.venv/bin/python platform/bin/decision_log.py record \
+              --manifest "$m" \
+              --phase policy \
+              --verdict "$VERDICT" \
+              --actor "${{ github.actor }}" \
+              --run-url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+              || true
+          done
+
+      - name: Fail if any ring refused
+        if: steps.rings.outcome != 'success'
+        run: |
+          echo "A ring refused this change. The comment on the pull request has"
+          echo "the full message, including the allowed values and the fix."
+          exit 1

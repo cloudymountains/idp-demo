@@ -1,0 +1,53 @@
+# The platform agent, runnable on a laptop.
+#
+#   export ANTHROPIC_API_KEY=...          # or AWS credentials for Bedrock
+#   docker compose up --build
+#
+# Then point an agent at http://localhost:8765/mcp, or run one request:
+#
+#   docker compose run --rm agent python -m agent "I need a small postgres database for the orders service in dev, owner checkout-team"
+
+services:
+  agent:
+    build: ./agent
+    ports:
+      - "127.0.0.1:8765:8765"
+    environment:
+      # The model. One of these two, and nothing else the agent could use.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AGENT_BEDROCK_REGION: ${AGENT_BEDROCK_REGION:-eu-west-1}
+      AGENT_MODEL: ${AGENT_MODEL:-}
+      AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-12}
+      DECISION_LOG_ENDPOINT: http://dynamodb:8000
+      AGENT_MEMORY: ${AGENT_MEMORY:-on}
+      AGENT_MEMORY_DAYS: ${AGENT_MEMORY_DAYS:-90}
+    volumes:
+      # The whole platform read-only: schema, policies, modules, pipeline.
+      # A bug in the harness still cannot edit a policy.
+      - .:/repo:ro
+      # The one place the agent writes.
+      - ./services:/repo/services
+      # check.sh renders tfvars here. Scratch space, gone with the container.
+      - type: tmpfs
+        target: /repo/deploy
+        tmpfs:
+          mode: 01777
+      # The host's virtualenv is built for another OS. Hide it.
+      - type: tmpfs
+        target: /repo/.venv
+    depends_on:
+      - dynamodb
+
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    # The decision log is the agent's memory, so it has to outlive a restart.
+    command: ["-jar", "DynamoDBLocal.jar", "-sharedDb", "-dbPath", "/data"]
+    user: root
+    volumes:
+      - decisions:/data
+
+volumes:
+  decisions:

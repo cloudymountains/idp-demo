@@ -1,0 +1,14 @@
+# Platform tooling. Install with:
+#   python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+
+# Ring 1: manifest parsing and full draft 2020-12 schema validation.
+# validate.py works without these via a built-in fallback, but with them
+# installed it uses the real parser and the real validator.
+PyYAML>=6.0
+jsonschema>=4.23
+
+# Ring 1: static analysis of the rendered Terraform, before any plan is run.
+checkov>=3.2
+
+# Cost estimation for the pipeline comment on each pull request.
+boto3>=1.35

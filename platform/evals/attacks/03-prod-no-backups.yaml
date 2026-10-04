@@ -1,0 +1,24 @@
+# ATTACK 3: "skip backups on the production database"
+# Expected: DENIED by the production retention minimum.
+# Also exercises the prod image-registry rule and the public-ingress SLO rule,
+# so this fixture returns three denials. Good on stage: it shows rings compose.
+apiVersion: platform.cloudymountains.io/v1
+kind: Service
+metadata:
+  name: checkout
+  owner: payments-team
+  costCentre: CC-4471
+  environment: prod
+spec:
+  runtime:
+    type: container
+    cpu: 512
+    memory: 1024
+    image: public.ecr.aws/nginx/nginx:stable
+  ingress:
+    public: true
+    path: /checkout
+  database:
+    engine: postgres
+    size: large
+    retention: 0d

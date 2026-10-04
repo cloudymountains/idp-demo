@@ -1,0 +1,5 @@
+{"resource_changes":[
+ {"type":"aws_db_instance","address":"module.service.aws_db_instance.this[0]","change":{"actions":["create"],"after":{"publicly_accessible":true,"storage_encrypted":false,"tags":{"Service":"checkout"}}}},
+ {"type":"aws_vpc_security_group_ingress_rule","address":"module.service.aws_vpc_security_group_ingress_rule.db_from_task[0]","change":{"actions":["create"],"after":{"cidr_ipv4":"0.0.0.0/0","from_port":5432}}},
+ {"type":"aws_iam_role_policy","address":"module.service.aws_iam_role_policy.oops","change":{"actions":["create"],"after":{"policy":"{\"Statement\":[{\"Effect\":\"Allow\",\"Action\":\"*\",\"Resource\":\"*\"}]}"}}}
+]}

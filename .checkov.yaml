@@ -1,0 +1,65 @@
+# Ring 1 static analysis of the module itself.
+#
+# Every skip below carries a reason. A suppression without a reason is just a
+# silenced alarm, and a platform that silences its own alarms has no standing
+# to enforce policy on anyone else. If a reason stops being true, the skip goes.
+#
+# Run:  ./.venv/bin/checkov -d platform/modules/service --config-file .checkov.yaml
+
+quiet: true
+compact: true
+
+skip-check:
+  # --- accepted for a conference demo, would not be accepted in production ---
+
+  - CKV_AWS_2      # ALB protocol is HTTPS
+  - CKV_AWS_378    # load balancer does not use HTTP
+  - CKV_AWS_103    # load balancer uses at least TLS 1.2
+  # The demo has no domain and no ACM certificate, so the listener is HTTP.
+  # A real deployment terminates TLS at the ALB and redirects 80 to 443. This is
+  # the single biggest gap between this module and something productionworthy,
+  # and it is worth saying so on stage rather than hoping nobody runs checkov.
+
+  - CKV_AWS_91     # ELBv2 access logging
+  # Requires an S3 bucket with a bucket policy per environment. Out of scope for
+  # the demo footprint. Application Signals and the ALB metrics cover what ring 5
+  # actually gates on.
+
+  - CKV2_AWS_28    # public ALB protected by WAF
+  # A WAF web ACL is roughly $6/month plus per-request cost and adds nothing the
+  # demo demonstrates.
+
+  - CKV_AWS_158    # CloudWatch log group encrypted with KMS
+  - CKV_AWS_149    # Secrets Manager secret encrypted with a customer KMS key
+  - CKV_AWS_354    # RDS Performance Insights encrypted with a customer KMS key
+  # All three are encrypted at rest with AWS-managed keys. Customer-managed keys
+  # add key lifecycle, grants and cost for no additional protection in a demo
+  # account. In a regulated environment these would be turned back on.
+
+  - CKV2_AWS_57    # Secrets Manager automatic rotation
+  # Rotation needs a Lambda in the database's VPC and a rotation schedule. It is
+  # the right thing to do and it is genuinely out of scope for 11 days.
+
+  - CKV_AWS_118    # RDS enhanced monitoring
+  # Needs a separate monitoring IAM role. Performance Insights is enabled and
+  # covers what the demo shows.
+
+  # --- false positives, with the reason they are false ---
+
+  - CKV2_AWS_5     # security groups attached to another resource
+  # All three groups are attached: alb-sg to the ALB, task-sg to the ECS service
+  # network configuration, db-sg to the RDS instance. checkov cannot follow the
+  # attachment through the ECS service's network_configuration block.
+
+  - CKV_AWS_111    # IAM policy allows write access without constraints
+  - CKV_AWS_356    # IAM policy document allows "*" as a resource
+  # One statement uses "*": xray:PutTraceSegments and xray:PutTelemetryRecords.
+  # X-Ray has no resource-level permissions for those actions, so "*" is the
+  # narrowest grant IAM will accept. Every other statement in the module is
+  # scoped to an ARN this service owns. Verified in iam.tf.
+
+  - CKV_AWS_133    # RDS instance has a backup policy
+  # backup_retention_period comes from the manifest via a local, so checkov
+  # cannot evaluate it statically. Ring 2 enforces a 7 day minimum in production
+  # in platform/policies/service.rego, which is the check that actually matters
+  # because it is environment-aware and this one is not.

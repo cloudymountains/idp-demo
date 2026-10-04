@@ -1,0 +1,12 @@
+{
+  "name": "validate-service-manifest",
+  "description": "Ring 1. Validates a service manifest against the platform schema and policy the moment it is saved, so the agent gets the failure inside the same session while it still has the context to fix it.",
+  "when": {
+    "type": "fileEdited",
+    "patterns": ["services/*/service.yaml"]
+  },
+  "then": {
+    "type": "askAgent",
+    "prompt": "The service manifest at {{file}} was just saved. Run both checks:\n\n  python3 platform/bin/validate.py {{file}}\n  conftest test --policy platform/policies --namespace platform.service {{file}}\n\nIf either fails, read the messages carefully. They name the violation, the allowed values, the reason and the fix. Correct the manifest and run both again until they pass.\n\nDo not edit anything under platform/schemas, platform/policies or platform/modules to make a check pass. Those belong to the platform team, and changing them to force a manifest through is the exact failure this design exists to prevent.\n\nIf a denial genuinely needs a human decision, such as a production exception, stop and say so rather than working around it."
+  }
+}

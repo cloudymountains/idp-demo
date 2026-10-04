@@ -1,0 +1,4 @@
+{"resource_changes":[
+ {"type":"aws_db_instance","address":"module.service.aws_db_instance.this[0]","change":{"actions":["create"],"after":{"publicly_accessible":false,"storage_encrypted":true,"tags":{"Service":"checkout","Owner":"payments-team","CostCentre":"CC-4471","Environment":"dev"}}}},
+ {"type":"aws_iam_role_policy","address":"module.service.aws_iam_role_policy.task_telemetry","change":{"actions":["create"],"after":{"policy":"{\"Statement\":[{\"Effect\":\"Allow\",\"Action\":[\"xray:PutTraceSegments\"],\"Resource\":\"*\"}]}"}}}
+]}

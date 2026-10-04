@@ -1,0 +1,10 @@
+output "url" { value = module.service.url }
+output "dashboard_url" { value = module.service.dashboard_url }
+output "slo_name" { value = module.service.slo_name }
+output "log_group" { value = module.service.log_group }
+output "database_endpoint" { value = module.service.database_endpoint }
+output "database_secret_arn" { value = module.service.database_secret_arn }
+output "task_role_arn" { value = module.service.task_role_arn }
+output "estimated_monthly_usd" { value = module.service.estimated_monthly_usd }
+output "summary" { value = module.service.summary }
+output "observability_slo_target" { value = module.service.observability_slo_target }

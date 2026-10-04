@@ -1,0 +1,7 @@
+# The platform agent. Kept apart from the root requirements.txt so the
+# platform itself still installs without a model SDK.
+anthropic[bedrock]>=0.60
+mcp>=1.12
+PyYAML>=6.0
+jsonschema>=4.23
+boto3>=1.35
